@@ -77,6 +77,21 @@ CpInitialize(
     return Uart16550Initialize(Port, Address, BaudRate);
 }
 
+NTSTATUS
+NTAPI
+CpInitializeEx(
+    _Inout_ PCPPORT Port,
+    _In_ PUCHAR Address,
+    _In_ ULONG BaudRate,
+    _In_ ULONG Flags)
+{
+    /* Validity checks */
+    if (Port == NULL || Address == NULL || BaudRate == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    return Uart16550InitializeEx(Port, Address, BaudRate, Flags);
+}
+
 USHORT
 NTAPI
 CpGetByte(

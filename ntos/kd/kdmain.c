@@ -109,6 +109,13 @@ KdpGetDebugMode(
         KdpDebugMode.Net = TRUE;
         KdpDebugMode.File = TRUE;
     }
+    else if (!_strnicmp(p2, "SOL", CONST_STR_LEN("SOL")))
+    {
+        p2 += CONST_STR_LEN("SOL");
+        KdpDebugMode.Serial = TRUE;
+        KdpSolDebugPort = TRUE;
+        SerialPortNumber = 0;
+    }
 
     return (PSTR)p2;
 }

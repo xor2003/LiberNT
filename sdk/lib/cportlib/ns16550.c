@@ -35,9 +35,32 @@ UCHAR RingIndicator;
 
 /* FUNCTIONS ******************************************************************/
 
+static __inline UCHAR
+Uart16550ReadReg(
+    _In_ PCPPORT Port,
+    _In_ ULONG Reg)
+{
+    if (Port->Flags & CPPORT_FLAG_MMIO)
+        return READ_REGISTER_UCHAR(Port->Address + Reg);
+    else
+        return READ_PORT_UCHAR(Port->Address + Reg);
+}
+
+static __inline VOID
+Uart16550WriteReg(
+    _In_ PCPPORT Port,
+    _In_ ULONG Reg,
+    _In_ UCHAR Byte)
+{
+    if (Port->Flags & CPPORT_FLAG_MMIO)
+        WRITE_REGISTER_UCHAR(Port->Address + Reg, Byte);
+    else
+        WRITE_PORT_UCHAR(Port->Address + Reg, Byte);
+}
+
 static BOOLEAN
 ComPortTest1(
-    _In_ PUCHAR Address)
+    _In_ PCPPORT Port)
 {
     /*
      * See "Building Hardware and Firmware to Complement Microsoft Windows Headless Operation"
@@ -65,16 +88,16 @@ ComPortTest1(
     UCHAR Mcr, Msr;
 
     /* Save the Modem Control Register */
-    Mcr = READ_PORT_UCHAR(Address + MODEM_CONTROL_REGISTER);
+    Mcr = Uart16550ReadReg(Port, MODEM_CONTROL_REGISTER);
 
     /* Enable loop (diagnostic) mode (set Bit 4 of the MCR) */
-    WRITE_PORT_UCHAR(Address + MODEM_CONTROL_REGISTER, SERIAL_MCR_LOOP);
+    Uart16550WriteReg(Port, MODEM_CONTROL_REGISTER, SERIAL_MCR_LOOP);
 
     /* Clear all modem output bits */
-    WRITE_PORT_UCHAR(Address + MODEM_CONTROL_REGISTER, SERIAL_MCR_LOOP);
+    Uart16550WriteReg(Port, MODEM_CONTROL_REGISTER, SERIAL_MCR_LOOP);
 
     /* Read the Modem Status Register */
-    Msr = READ_PORT_UCHAR(Address + MODEM_STATUS_REGISTER);
+    Msr = Uart16550ReadReg(Port, MODEM_STATUS_REGISTER);
 
     /*
      * The upper nibble of the MSR (modem output bits) must be
@@ -83,15 +106,15 @@ ComPortTest1(
     if ((Msr & (SERIAL_MSR_CTS | SERIAL_MSR_DSR | SERIAL_MSR_RI | SERIAL_MSR_DCD)) == 0x00)
     {
         /* Set all modem output bits */
-        WRITE_PORT_UCHAR(Address + MODEM_CONTROL_REGISTER,
-                         SERIAL_MCR_OUT1 | SERIAL_MCR_LOOP); // Windows
+        Uart16550WriteReg(Port, MODEM_CONTROL_REGISTER,
+                          SERIAL_MCR_OUT1 | SERIAL_MCR_LOOP); // Windows
 /* ReactOS
-        WRITE_PORT_UCHAR(Address + MODEM_CONTROL_REGISTER,
-                         SERIAL_MCR_DTR | SERIAL_MCR_RTS | SERIAL_MCR_OUT1 | SERIAL_MCR_OUT2 | SERIAL_MCR_LOOP);
+        Uart16550WriteReg(Port, MODEM_CONTROL_REGISTER,
+                          SERIAL_MCR_DTR | SERIAL_MCR_RTS | SERIAL_MCR_OUT1 | SERIAL_MCR_OUT2 | SERIAL_MCR_LOOP);
 */
 
         /* Read the Modem Status Register */
-        Msr = READ_PORT_UCHAR(Address + MODEM_STATUS_REGISTER);
+        Msr = Uart16550ReadReg(Port, MODEM_STATUS_REGISTER);
 
         /*
          * The upper nibble of the MSR (modem output bits) must be
@@ -105,14 +128,14 @@ ComPortTest1(
     }
 
     /* Restore the MCR */
-    WRITE_PORT_UCHAR(Address + MODEM_CONTROL_REGISTER, Mcr);
+    Uart16550WriteReg(Port, MODEM_CONTROL_REGISTER, Mcr);
 
     return RetVal;
 }
 
 static BOOLEAN
 ComPortTest2(
-    _In_ PUCHAR Address)
+    _In_ PCPPORT Port)
 {
     /*
      * This test checks whether the 16450/16550 scratch register is available.
@@ -123,9 +146,9 @@ ComPortTest2(
 
     do
     {
-        WRITE_PORT_UCHAR(Address + SCRATCH_REGISTER, Byte);
+        Uart16550WriteReg(Port, SCRATCH_REGISTER, Byte);
 
-        if (READ_PORT_UCHAR(Address + SCRATCH_REGISTER) != Byte)
+        if (Uart16550ReadReg(Port, SCRATCH_REGISTER) != Byte)
             return FALSE;
 
     } while (++Byte != 0);
@@ -133,12 +156,32 @@ ComPortTest2(
     return TRUE;
 }
 
+static BOOLEAN
+Uart16550DoesPortExistInt(
+    _In_ PCPPORT Port)
+{
+    return ( ComPortTest1(Port) || ComPortTest2(Port) );
+}
+
 BOOLEAN
 NTAPI
 Uart16550DoesPortExist(
     _In_ PUCHAR Address)
 {
-    return ( ComPortTest1(Address) || ComPortTest2(Address) );
+    CPPORT Port = { Address, 0, 0 };
+
+    return Uart16550DoesPortExistInt(&Port);
+}
+
+static VOID
+Uart16550EnableFifoInt(
+    _In_ PCPPORT Port,
+    _In_ BOOLEAN Enable)
+{
+    /* Set FIFO and clear the receive/transmit buffers */
+    Uart16550WriteReg(Port, FIFO_CONTROL_REGISTER,
+                      Enable ? SERIAL_FCR_ENABLE | SERIAL_FCR_RCVR_RESET | SERIAL_FCR_TXMT_RESET
+                             : SERIAL_FCR_DISABLE);
 }
 
 VOID
@@ -147,10 +190,9 @@ Uart16550EnableFifo(
     _In_ PUCHAR Address,
     _In_ BOOLEAN Enable)
 {
-    /* Set FIFO and clear the receive/transmit buffers */
-    WRITE_PORT_UCHAR(Address + FIFO_CONTROL_REGISTER,
-                     Enable ? SERIAL_FCR_ENABLE | SERIAL_FCR_RCVR_RESET | SERIAL_FCR_TXMT_RESET
-                            : SERIAL_FCR_DISABLE);
+    CPPORT Port = { Address, 0, 0 };
+
+    Uart16550EnableFifoInt(&Port, Enable);
 }
 
 VOID
@@ -163,18 +205,65 @@ Uart16550SetBaud(
     ULONG Mode = CLOCK_RATE / BaudRate;
 
     /* Set the DLAB on */
-    Lcr = READ_PORT_UCHAR(Port->Address + LINE_CONTROL_REGISTER);
-    WRITE_PORT_UCHAR(Port->Address + LINE_CONTROL_REGISTER, Lcr | SERIAL_LCR_DLAB);
+    Lcr = Uart16550ReadReg(Port, LINE_CONTROL_REGISTER);
+    Uart16550WriteReg(Port, LINE_CONTROL_REGISTER, Lcr | SERIAL_LCR_DLAB);
 
     /* Set the baud rate */
-    WRITE_PORT_UCHAR(Port->Address + DIVISOR_LATCH_LSB, (UCHAR)(Mode & 0xFF));
-    WRITE_PORT_UCHAR(Port->Address + DIVISOR_LATCH_MSB, (UCHAR)((Mode >> 8) & 0xFF));
+    Uart16550WriteReg(Port, DIVISOR_LATCH_LSB, (UCHAR)(Mode & 0xFF));
+    Uart16550WriteReg(Port, DIVISOR_LATCH_MSB, (UCHAR)((Mode >> 8) & 0xFF));
 
     /* Reset DLAB */
-    WRITE_PORT_UCHAR(Port->Address + LINE_CONTROL_REGISTER, Lcr);
+    Uart16550WriteReg(Port, LINE_CONTROL_REGISTER, Lcr);
 
     /* Save baud rate in port */
     Port->BaudRate = BaudRate;
+}
+
+NTSTATUS
+NTAPI
+Uart16550InitializeEx(
+    _Inout_ PCPPORT Port,
+    _In_ PUCHAR Address,
+    _In_ ULONG BaudRate,
+    _In_ ULONG Flags)
+{
+    CPPORT TestPort = { Address, 0, (USHORT)(Flags & CPPORT_FLAG_MMIO) };
+
+    /* Validity checks */
+    if (Port == NULL || Address == NULL || BaudRate == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    if (!Uart16550DoesPortExistInt(&TestPort))
+        return STATUS_NOT_FOUND;
+
+    /* Initialize port data */
+    Port->Address  = Address;
+    Port->BaudRate = 0;
+    Port->Flags    = (USHORT)Flags;
+
+    /* Disable the interrupts */
+    Uart16550WriteReg(Port, LINE_CONTROL_REGISTER, 0);
+    Uart16550WriteReg(Port, INTERRUPT_ENABLE_REGISTER, 0);
+
+    /* Turn on DTR, RTS and OUT2 */
+    Uart16550WriteReg(Port, MODEM_CONTROL_REGISTER,
+                      SERIAL_MCR_DTR | SERIAL_MCR_RTS | SERIAL_MCR_OUT2);
+
+    /* Set the baud rate */
+    Uart16550SetBaud(Port, BaudRate);
+
+    /* Set 8 data bits, 1 stop bit, no parity, no break */
+    Uart16550WriteReg(Port, LINE_CONTROL_REGISTER,
+                      SERIAL_8_DATA | SERIAL_1_STOP | SERIAL_NONE_PARITY);
+
+    /* Turn on FIFO */
+    // TODO: Check whether FIFO exists and turn it on in that case.
+    Uart16550EnableFifoInt(Port, TRUE); // for 16550
+
+    /* Read junk out of the RBR */
+    (VOID)Uart16550ReadReg(Port, RECEIVE_BUFFER_REGISTER);
+
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS
@@ -184,41 +273,7 @@ Uart16550Initialize(
     _In_ PUCHAR Address,
     _In_ ULONG BaudRate)
 {
-    /* Validity checks */
-    if (Port == NULL || Address == NULL || BaudRate == 0)
-        return STATUS_INVALID_PARAMETER;
-
-    if (!Uart16550DoesPortExist(Address))
-        return STATUS_NOT_FOUND;
-
-    /* Initialize port data */
-    Port->Address  = Address;
-    Port->BaudRate = 0;
-    Port->Flags    = 0;
-
-    /* Disable the interrupts */
-    WRITE_PORT_UCHAR(Address + LINE_CONTROL_REGISTER, 0);
-    WRITE_PORT_UCHAR(Address + INTERRUPT_ENABLE_REGISTER, 0);
-
-    /* Turn on DTR, RTS and OUT2 */
-    WRITE_PORT_UCHAR(Address + MODEM_CONTROL_REGISTER,
-                     SERIAL_MCR_DTR | SERIAL_MCR_RTS | SERIAL_MCR_OUT2);
-
-    /* Set the baud rate */
-    Uart16550SetBaud(Port, BaudRate);
-
-    /* Set 8 data bits, 1 stop bit, no parity, no break */
-    WRITE_PORT_UCHAR(Port->Address + LINE_CONTROL_REGISTER,
-                     SERIAL_8_DATA | SERIAL_1_STOP | SERIAL_NONE_PARITY);
-
-    /* Turn on FIFO */
-    // TODO: Check whether FIFO exists and turn it on in that case.
-    Uart16550EnableFifo(Address, TRUE); // for 16550
-
-    /* Read junk out of the RBR */
-    (VOID)READ_PORT_UCHAR(Address + RECEIVE_BUFFER_REGISTER);
-
-    return STATUS_SUCCESS;
+    return Uart16550InitializeEx(Port, Address, BaudRate, 0);
 }
 
 static UCHAR
@@ -230,11 +285,11 @@ Cp16550ReadLsr(
     UCHAR Lsr, Msr;
 
     /* Read the LSR and check if the expected value is present */
-    Lsr = READ_PORT_UCHAR(Port->Address + LINE_STATUS_REGISTER);
+    Lsr = Uart16550ReadReg(Port, LINE_STATUS_REGISTER);
     if (!(Lsr & ExpectedValue))
     {
         /* Check the MSR for ring indicator toggle */
-        Msr = READ_PORT_UCHAR(Port->Address + MODEM_STATUS_REGISTER);
+        Msr = Uart16550ReadReg(Port, MODEM_STATUS_REGISTER);
 
         /* If the indicator reaches 3, we've seen this on/off twice */
         RingIndicator |= (Msr & SERIAL_MSR_RI) ? 1 : 2;
@@ -279,7 +334,7 @@ Uart16550GetByte(
                 return CP_GET_SUCCESS;
 
             /* Otherwise read the byte and return it */
-            *Byte = READ_PORT_UCHAR(Port->Address + RECEIVE_BUFFER_REGISTER);
+            *Byte = Uart16550ReadReg(Port, RECEIVE_BUFFER_REGISTER);
 
             /* Handle CD if port is in modem control mode */
             if (Port->Flags & CPPORT_FLAG_MODEM_CONTROL)
@@ -327,7 +382,7 @@ Uart16550PutByte(
     Port->Flags &= ~CPPORT_FLAG_TX_STALLED;
 
     /* Send the byte */
-    WRITE_PORT_UCHAR(Port->Address + TRANSMIT_HOLDING_REGISTER, Byte);
+    Uart16550WriteReg(Port, TRANSMIT_HOLDING_REGISTER, Byte);
 }
 
 /* EOF */

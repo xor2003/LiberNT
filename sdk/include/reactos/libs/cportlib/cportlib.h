@@ -24,6 +24,7 @@
 #define CPPORT_FLAG_MODEM_CONTROL   0x02
 #define CPPORT_FLAG_KEEP_BAUD       0x08
 #define CPPORT_FLAG_TX_STALLED      0x10
+#define CPPORT_FLAG_MMIO            0x20
 
 typedef struct _CPPORT
 {
@@ -55,6 +56,14 @@ CpInitialize(
     _Inout_ PCPPORT Port,
     _In_ PUCHAR Address,
     _In_ ULONG BaudRate);
+
+NTSTATUS
+NTAPI
+CpInitializeEx(
+    _Inout_ PCPPORT Port,
+    _In_ PUCHAR Address,
+    _In_ ULONG BaudRate,
+    _In_ ULONG Flags);
 
 USHORT
 NTAPI

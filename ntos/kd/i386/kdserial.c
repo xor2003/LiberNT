@@ -12,6 +12,7 @@
 #include <ntoskrnl.h>
 #define NDEBUG
 #include <debug.h>
+#include <ndk/halfuncs.h>
 
 //#include <cportlib/cportlib.h>
 #include <cportlib/uartinfo.h>
@@ -24,6 +25,47 @@
 // static BOOLEAN PortInitialized = FALSE;
 
 /* REACTOS FUNCTIONS **********************************************************/
+
+static
+BOOLEAN
+KdpSolSetupPort(
+    _Inout_ PCPPORT PortInformation)
+{
+    DEBUG_DEVICE_DESCRIPTOR Device;
+    NTSTATUS Status;
+    ULONG i;
+
+    RtlZeroMemory(&Device, sizeof(Device));
+    Device.Bus = 0xFFFFFFFF;
+    Device.Slot = 0xFFFFFFFF;
+    Device.VendorID = 0xFFFF;
+    Device.DeviceID = 0xFFFF;
+    Device.BaseClass = PCI_CLASS_SIMPLE_COMMS_CTLR;
+    Device.SubClass = PCI_SUBCLASS_COM_SERIAL;
+    Device.ProgIf = 0x02;
+
+    Status = KdSetupPciDeviceForDebugging(NULL, &Device);
+    if (!NT_SUCCESS(Status) && !Device.BaseAddress[0].Valid)
+        return FALSE;
+
+    for (i = 0; i < MAXIMUM_DEBUG_BARS; ++i)
+    {
+        if (!Device.BaseAddress[i].Valid)
+            continue;
+
+        if (Device.BaseAddress[i].Type == CmResourceTypeMemory)
+        {
+            PortInformation->Address = Device.BaseAddress[i].TranslatedAddress;
+            PortInformation->Flags = CPPORT_FLAG_MMIO;
+            return TRUE;
+        }
+
+        if (PortInformation->Address == NULL)
+            PortInformation->Address = Device.BaseAddress[i].TranslatedAddress;
+    }
+
+    return PortInformation->Address != NULL;
+}
 
 BOOLEAN
 NTAPI
@@ -76,14 +118,18 @@ KdPortInitializeEx(
     }
 #endif
 
+    if (KdpSolDebugPort && ComPortNumber == 0 && PortInformation->Address == NULL)
+        KdpSolSetupPort(PortInformation);
+
     /*
      * Initialize the port
      */
-    Status = CpInitialize(PortInformation,
-                          (ComPortNumber == 0 ? PortInformation->Address
-                                              : UlongToPtr(BaseArray[ComPortNumber])),
-                          (PortInformation->BaudRate == 0 ? DEFAULT_DEBUG_BAUD_RATE
-                                                          : PortInformation->BaudRate));
+    Status = CpInitializeEx(PortInformation,
+                            (ComPortNumber == 0 ? PortInformation->Address
+                                                : UlongToPtr(BaseArray[ComPortNumber])),
+                            (PortInformation->BaudRate == 0 ? DEFAULT_DEBUG_BAUD_RATE
+                                                            : PortInformation->BaudRate),
+                            PortInformation->Flags);
     if (!NT_SUCCESS(Status))
     {
         HalDisplayString("\r\nKernel Debugger: Serial port not available\r\n\r\n");

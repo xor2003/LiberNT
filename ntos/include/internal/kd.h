@@ -19,6 +19,8 @@ KdPortIsComPortNumberValid(
     ULONG ComPortNumber
 );
 
+extern BOOLEAN KdpSolDebugPort;
+
 BOOLEAN
 NTAPI
 KdPortGetByteEx(

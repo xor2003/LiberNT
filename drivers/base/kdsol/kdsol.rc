@@ -1,0 +1,5 @@
+#define REACTOS_VERSION_DLL
+#define REACTOS_STR_FILE_DESCRIPTION    "LiberNT Kernel Debugger PCI Serial (AMT SOL) Extension DLL"
+#define REACTOS_STR_INTERNAL_NAME       "kdsol"
+#define REACTOS_STR_ORIGINAL_FILENAME   "kdsol.dll"
+#include <reactos/version.rc>
