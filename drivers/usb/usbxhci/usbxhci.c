@@ -6593,6 +6593,8 @@ XHCI_WaitForClaimedEvents(
     Count = Extension->EventTicketCpuCount;
     for (Cpu = 0; Cpu < Count; Cpu++)
     {
+        ULONGLONG WaitIterations = 50000000ULL;
+
         if (Cpu == Self)
             continue;
         for (;;)
@@ -6600,6 +6602,21 @@ XHCI_WaitForClaimedEvents(
             Ticket = (ULONG)InterlockedCompareExchange(&Extension->EventTicketOnCpu[Cpu], 0, 0);
             if (Ticket == 0 || (LONG)(Ticket - Snapshot) > 0)
                 break;
+            /*
+             * A claimed ticket that never clears must not wedge this
+             * CPU forever: the handler may itself be blocked behind a
+             * lock this thread's call chain already holds (claim/drain
+             * deadlock at DISPATCH_LEVEL). Bound the spin so the
+             * caller can proceed, release its locks, and let the
+             * stranded handler finish — a stuck event is degradable,
+             * a hard CPU freeze is not.
+             */
+            if (--WaitIterations == 0)
+            {
+                DPRINT1("XHCI_WaitForClaimedEvents: cpu %lu ticket %lx stuck, giving up\n",
+                        Cpu, Ticket);
+                break;
+            }
             YieldProcessor();
         }
     }
